@@ -1,4 +1,4 @@
-# ARFanet VoIP SIP Router
+# ARF-a-NET VoIP SIP Router
 
 Hello?? Operator?? This is the SIP Router component of the VoIP Suite for
 ARFa-NET.
