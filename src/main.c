@@ -6,10 +6,14 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <errno.h>
+
+#define MAX_IPV4_UDP_PAYLOAD_SIZE 65535 // this is based on the UDP header's 16 bit length field, which can represent up to 65535 bytes (including header) THIS IS NOT THE MAXIMUM FOR IPV6 BECAUSE OF JUMBOS
 
 typedef struct {
-    int length;
-    char* data;
+    struct sockaddr_in source_ip;
+    size_t length;
+    unsigned char *data;
 } raw_packet;
 
 int socket_attain() {
@@ -20,7 +24,7 @@ int socket_attain() {
     );
 
     if (sockfd < 0) { // socket returns -1 for an error
-        perror("[socket_attain: ERROR] Failed to get a socket"); // print an error (text is error prefix)
+        perror("[socket_attain: ERROR] Failed to get a socket\n"); // print an error (text is error prefix)
         return -1; // exit
     }
 
@@ -39,61 +43,39 @@ int socket_attain() {
     return sockfd;
 }
 
-int filter_udp_packet(unsigned char* source, unsigned char* dest) {
-    if (0 == 1) { // currently there is no filtering so this block is dead for now TODO: implement
-        perror("[filter_udp_packet: ERROR] Packet from %hu to %hu failed verification", ntohl(source), ntohl(dest)); // print a warning
+
+int recv_packet(int sockfd, raw_packet* received_packet) {
+    unsigned char* packet_data = (unsigned char*)malloc(MAX_IPV4_UDP_PAYLOAD_SIZE);
+    if (packet_data == NULL) {
+        perror("[recv_packet: ERROR] Failed to calloc");
+        return -1;
+    };
+
+    struct sockaddr_in source_ip_addr = { 0 }; // init and zero an IPv4 address structure
+    socklen_t source_ip_addr_len = sizeof source_ip_addr; // an io variable we have to init for recvfrom to tell us how big the IPv4 address ended up being (this should not change, but by spec it may)
+
+    ssize_t len;
+    do {
+        len = recvfrom(
+            sockfd, // the udp packet to receive from
+            packet_data, // where to put the datagrams payload
+            MAX_IPV4_UDP_PAYLOAD_SIZE, // data's maximum capacity
+            0, // we are requesting no special receive flags
+            (struct sockaddr *)&source_ip_addr, // where to put the senders IP address
+            &source_ip_addr_len // how long that IP address is (specifically passing the address of the size variable, turning a value into a pointer using "&"
+        );
+    } while (len < 0 && errno == EINTR);
+
+    if (len < 0) {
+        perror("[recv_packet: ERROR] Failed to receive a packet properly");
+        free(packet_data);
         return -1;
     }
+
+    received_packet->source_ip = source_ip_addr;
+    received_packet->length = (size_t)len;
+    received_packet->data = packet_data;
     return 0;
-}
-
-int recv_packet(int sockfd, raw_packet* return_packet) {
-    unsigned char header[8] = { 0 }; // make an array the length of the UDP header and initialize to zero to avoid garbage data
-    recvfrom(sockfd, header, sizeof(header), MSG_PEEK, NULL, NULL) // receive the header from sockfd using the peek flag to not pop the message off the queue. we don't check return value as if it failed the packet is invalid or something is VERY wrong with the machine
-
-    unsigned char source[2]; // define a short array to store the source of the UDP header
-    memcpy(source, header, 2); // copy the source field of the UDP packet to the source variable
-    unsigned char dest[2]; // define a short array to store the destination of the UDP header
-    memcpy(dest, header + 2, 2); // copy the source field of the UDP packet to the source variable
-
-    if (filter_udp_packet(source, dest) != 0) { // if the packet fails the filter (also btw this is also UDP specific (well, IP specific)) return an error
-        return -1; // and exit (filter_udp_packet already printed an error)
-    }
-
-    unsigned char charlen[2]; // init a 2 bit large char which'll hold the length of the UDP packet
-    memcpy(charlen, header + 4, 2); // extract the length field from the UDP packet header
-    unsigned short len = (charlen[0] << 8) | charlen[1]; // quickly convert the big endian length to an unsigned short
-
-    char* udp_packet = calloc(len, 2); // allocate some heap the size of the UDP packet (or atleast what it advertises) and zero it
-
-    if (udp_packet == NULL) { // check if calloc has failed. if this occurs its really bad, this means you might be out of memory
-        char trashbin[1] = { 0 };
-        recvfrom(sockfd, trashbin, 0, 0, NULL, NULL); // drop the packet to clear it off the queue (udp should be ok with this)
-        perror("[recv_packet: ERROR] calloc'ing udp_packet has failed");
-        return -1;
-    }
-
-    if (recvfrom(sockfd, udp_packet, len, 0, NULL, NULL) != len) { // read the full packet now from sockfd, and without the peek flag so it does pop the packet off the queue!
-        perror("A packet is lying about its size\n"); // sanity check if the packet length read and the size it reported are different. if you see this error add more checking here.
-        free(udp_packet); // free the memory allocated earlier
-        return -1;
-    }
-
-    return_data = calloc(len - 8, 1);
-
-    if (return_data == NULL) { // check if calloc has failed
-        perror("[recv_packet: ERROR] calloc'ing return_data has failed"); // show an error
-        free(udp_packet); // free the packet
-        return -1;
-    }
-
-    strncpy(return_data, udp_packet + 8, len - 8); // copy the udp packet to return data, skipping the udp header (so copying the data only)
-
-    return_packet->length = len - 8; // set the length field of the return struct to the length of the data
-    return_packet->data = return_data; // add the pointer
-
-    free(udp_packet); // free the temporary memory allocation
-    return 0; // exit successfully
 }
 
 int main() {
@@ -103,19 +85,22 @@ int main() {
     int in_socket = socket_attain(); // file descriptor socket
     int out_socket = in_socket; // this is for stand-alone mode, if you'd like to chain multiple programs together change this or the input socket
 
-    struct raw_packet* received_packet; // initialize a structure for the sip packet
+    if (in_socket < 0 || out_socket < 0) {
+        return -1;
+    }
+
     while (true) {
-        received_packet = NULL; // set the pointer to the structure to null
-        if (recv_packet(in_socket, received_packet) != 0) {  // receive the next packet into a raw_packet struct. this is datatype specific and should be changed if you change the socket.
-            free(received_packet); // free the memory allocation for the packet data
-            continue; // go back to the start of the loop
-        };
+        raw_packet received_packet = (raw_packet){ 0 };
+
+        if (recv_packet(in_socket, &received_packet) < 0) {
+            continue;
+        }
+
+        printf("from %s:%u, %zu bytes\n", inet_ntoa(received_packet.source_ip.sin_addr), (unsigned)ntohs(received_packet.source_ip.sin_port), received_packet.length);
 
         // there will eventually be a return call in here to exit, but not here rn, TODO
 
-        if (received_packet != NULL) {
-            free(received_packet);
-        }
+        free(received_packet.data);
     }
 
     close(in_socket); // close and free the socket
