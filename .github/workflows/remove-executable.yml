@@ -1,0 +1,25 @@
+name: Remove Executable
+
+on:
+    push:
+        branches: [main]
+        paths: ['main']
+    pull_request:
+    workflow_dispatch:
+
+concurrency:
+    group: build-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Remove
+              run: make rm_main
