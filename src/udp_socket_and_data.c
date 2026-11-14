@@ -8,7 +8,7 @@
 #include <stdio.h>
 
 #include "main.h"
-#include "udp.h"
+#include "udp_socket_and_data.h"
 
 int socket_attain() {
     int sockfd = socket( // request socket (as file descriptor)
