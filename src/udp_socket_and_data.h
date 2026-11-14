@@ -1,5 +1,5 @@
-#ifndef UDP_H
-#define UDP_H
+#ifndef UDP_SOCKET_AND_DATA_H
+#define UDP_SOCKET_AND_DATA_H
 
 #include "main.h"
 
